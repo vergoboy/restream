@@ -1,0 +1,159 @@
+#!/bin/bash
+# Root watchdog: the restream depends on the tunnel for both DNS and the
+# outbound connection. Two failure modes need handling:
+#
+#   1. sing-box wedges (keeps running, stops resolving or stops carrying
+#      traffic) -- `restart: unless-stopped` never fires.
+#   2. the tunnel container dies or the restreamer's netns is recreated
+#      (the tunnel shares that netns, so a plain restart of the restreamer
+#      leaves the tunnel attached to the old one).
+#
+# The health check is the exit IP, not DNS: the compose file hands the
+# containers public resolvers, so DNS keeps answering even when every packet
+# is leaving on the host IP. A leak is exactly the case that matters here,
+# so assert the exit IP matches the tunnel's expected IP and is not the
+# host's own IP. Restart only after two consecutive failures, so one slow
+# probe does not cause a loop.
+set -uo pipefail
+STATE=/opt/noisy/data/egress/watchdog.state
+EXPECT=/opt/noisy/data/egress/expected_exit_ip
+HOSTIP=/opt/noisy/data/egress/host_exit_ip
+PIDS_TRIGGER=80   # percent of pids.max; see reclaim_zombies below
+
+# The core spawns ffmpeg for the process and does not reap the children, so
+# every attempt that fails (no publisher connected, destination unreachable)
+# leaves a permanent zombie. Docker's default 256 pid cap is reached in
+# minutes, and once pids.current hits pids.max every fork in the container
+# fails with EAGAIN: the panel cannot even read the process state and the
+# whole data plane is dead. Only the parent can reap a zombie, and the parent
+# is the core, so the fix is to replace the container.
+#
+# Read the cgroup file from the host on purpose: at the point this matters,
+# `docker exec` cannot fork inside the container to ask it anything.
+reclaim_zombies() {
+  local id cg cur max pct
+  id=$(docker inspect noisy-restreamer -f '{{.Id}}' 2>/dev/null) || return 0
+  cg="/sys/fs/cgroup/system.slice/docker-$id.scope"
+  [ -r "$cg/pids.current" ] || return 0
+  cur=$(cat "$cg/pids.current" 2>/dev/null)
+  max=$(cat "$cg/pids.max" 2>/dev/null)
+  case "${cur:-x}${max:-x}" in (*[!0-9]*) return 0 ;; esac
+  [ "${max:-0}" -gt 0 ] || return 0
+  [ "${cur:-0}" -gt 0 ] || return 0
+  pct=$((cur * 100 / max))
+  [ "$pct" -ge "$PIDS_TRIGGER" ] || return 0
+
+  echo "core has $cur/$max processes ($pct%), replacing it to clear unreaped children"
+  docker compose -f /opt/noisy/docker-compose.yml \
+    up -d --force-recreate noisy-restreamer >/dev/null 2>&1 || {
+    echo "could not replace noisy-restreamer" >&2; return 1; }
+  # The tunnel shares that container's netns, so it has to be recreated too or
+  # it stays attached to the old namespace and the restream leaks.
+  docker compose -f /opt/noisy/docker-compose.yml \
+    up -d --force-recreate noisy-egress >/dev/null 2>&1
+  for _ in $(seq 1 12); do
+    sleep 5
+    fail "after reclaim"
+    rc=$?
+    [ "$rc" -eq 0 ] && { echo "tunnel recovered after the reclaim"; return 0; }
+  done
+  echo "reclaimed the core, but the tunnel is still unhealthy" >&2
+  return 1
+}
+
+fail() {
+  local why="$1"
+
+  # A confirmed host-ip egress is a leak, so recognise it on the first sighting
+  # and not after a debounce. Use the cached host ip: a live probe of it can
+  # fail for unrelated reasons, which would hide the leak behind the debounce.
+  local host_ip=""
+  [ -r "$HOSTIP" ] && host_ip=$(cat "$HOSTIP" 2>/dev/null)
+  if [ -z "$host_ip" ]; then
+    host_ip=$(wget -qO- --timeout=10 https://api.ipify.org 2>/dev/null)
+  fi
+  local tunnel_ip
+  tunnel_ip=$(docker exec noisy-restreamer sh -c \
+    'wget -qO- --timeout=10 https://api.ipify.org' 2>/dev/null)
+
+  if [ -z "$tunnel_ip" ]; then
+    echo "$why: no exit ip from the restreamer" >&2
+    return 1
+  fi
+  if [ -n "$host_ip" ] && [ "$tunnel_ip" = "$host_ip" ]; then
+    echo "$why: restreamer is egressing on the host ip ($host_ip)" >&2
+    return 2
+  fi
+  if [ -r "$EXPECT" ]; then
+    local want
+    want=$(cat "$EXPECT" 2>/dev/null)
+    if [ -n "$want" ] && [ "$tunnel_ip" != "$want" ]; then
+      echo "$why: exit ip $tunnel_ip is not the tunnel ip $want" >&2
+      return 1
+    fi
+  fi
+  return 0
+}
+
+if ! docker ps --format '{{.Names}}' | grep -qx noisy-restreamer; then
+  echo "restreamer container is not running"
+  exit 0
+fi
+
+# Checked before the tunnel probe: a container out of pids cannot answer the
+# probe (the exec itself fails to fork), so this is the cause of that symptom
+# as often as the effect.
+if ! reclaim_zombies; then
+  rm -f "$STATE"
+  exit 1
+fi
+
+fail "probe"
+rc=$?
+
+if [ "$rc" -eq 0 ]; then
+  rm -f "$STATE"
+  exit 0
+fi
+
+fails=0
+[ -r "$STATE" ] && fails=$(cat "$STATE" 2>/dev/null || echo 0)
+case "$fails" in (*[!0-9]*|'') fails=0 ;; esac
+fails=$((fails + 1))
+
+# A confirmed host-ip egress is not a flaky probe, it is a leak: repair it on
+# the first sighting. An empty or unexpected ip could be a slow request, so
+# those still need two strikes in a row.
+if [ "$rc" -ne 2 ] && [ "$fails" -lt 2 ]; then
+  echo "$fails" >"$STATE"
+  echo "tunnel unhealthy (attempt $fails), not restarting yet"
+  exit 0
+fi
+
+echo "tunnel unhealthy (fails=$fails); recreating the tunnel"
+# The tunnel shares the restreamer's network namespace, so if that netns was
+# recreated underneath us the running tunnel container is still attached to the
+# old one and a plain restart would not rejoin it. Rejoining needs a fresh
+# container, so recreate it from compose rather than restarting in place.
+if ! docker compose -f /opt/noisy/docker-compose.yml \
+    up -d --force-recreate noisy-egress >/dev/null 2>&1; then
+  rm -f "$STATE"
+  echo "failed to recreate the tunnel container"
+  exit 1
+fi
+
+# A fresh sing-box needs a moment to bring the tun up and get a route.
+for _ in $(seq 1 12); do
+  sleep 5
+  fail "after recreate"
+  rc=$?
+  if [ "$rc" -eq 0 ]; then
+    rm -f "$STATE"
+    echo "tunnel recovered"
+    exit 0
+  fi
+done
+
+rm -f "$STATE"
+echo "tunnel recreated but still unhealthy"
+exit 1

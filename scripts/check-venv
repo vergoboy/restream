@@ -1,0 +1,9 @@
+#!/bin/bash
+# Root helper: fail early if the app environment is not usable.
+set -euo pipefail
+VENV=/opt/noisy/app/.venv
+[ -x "$VENV/bin/gunicorn" ] || {
+  echo "missing $VENV/bin/gunicorn - run the installer" >&2; exit 1; }
+"$VENV/bin/python" -c 'import flask, gunicorn, cryptography' || {
+  echo "app dependencies are not importable" >&2; exit 1; }
+exit 0

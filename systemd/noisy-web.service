@@ -1,0 +1,54 @@
+[Unit]
+Description=Noisy restreamer control panel
+Documentation=https://docs.datarhei.com/core/
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=simple
+User=noisy
+Group=noisy
+WorkingDirectory=/opt/noisy/app
+EnvironmentFile=/opt/noisy/secrets/core.env
+EnvironmentFile=/opt/noisy/config/web.env
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=NOISY_PORT=18081
+ExecStartPre=/opt/noisy/scripts/check-venv
+ExecStart=/opt/noisy/app/.venv/bin/gunicorn \
+    --bind 127.0.0.1:18081 \
+    --workers 2 \
+    --threads 4 \
+    --timeout 30 \
+    --graceful-timeout 20 \
+    --access-logfile - \
+    --error-logfile - \
+    --log-level warning \
+    main:app
+Restart=always
+RestartSec=3
+
+# The panel needs nothing but its own state directory and the loopback socket
+# to the restreamer. It must never be able to write the container or proxy
+# configuration, only call the two narrow sudo helpers.
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=no
+SystemCallArchitectures=native
+ReadWritePaths=/opt/noisy/data
+
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

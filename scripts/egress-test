@@ -1,0 +1,101 @@
+#!/bin/bash
+# Root helper: prove every VPN route reaches YouTube, without disturbing the
+# live stream. Each candidate gets its own TUN in a throwaway container, so a
+# failing route cannot interrupt a running restream.
+#
+# Two things this script must never get wrong:
+#   1. the probe sing-box must use its own cache directory, or it blocks on
+#      the cache file the live instance already holds and dies on startup;
+#   2. a probe must be shown to leave via the tunnel. If the test sing-box
+#      dies, the probe still reaches the internet on the host's own IP, which
+#      would otherwise look like a pass.
+set -uo pipefail
+
+ROUTES="vpn-hysteria2 vpn-grpc vpn-reality vpn-httpupgrade vpn-xhttp vpn-httpobf vpn-xray"
+SB=/opt/noisy/secrets/sing-box.json
+CORE_IMAGE=$(docker inspect noisy-restreamer -f '{{.Config.Image}}' 2>/dev/null)
+[ -n "$CORE_IMAGE" ] || { echo "cannot read the core image reference" >&2; exit 1; }
+
+# Docker compose prefixes the network with the project name, so never assume
+# it is "noisy_net"; ask the running stack which network it uses.
+PROBE_NET=$(docker inspect noisy-restreamer \
+  -f '{{range $k,$v := .NetworkSettings.Networks}}{{$k}}{{end}}' 2>/dev/null)
+[ -n "$PROBE_NET" ] || { echo "cannot find the network used by noisy-restreamer" >&2; exit 1; }
+
+FAILED=0
+TMP=$(mktemp -d /opt/noisy/data/egress/test.XXXXXX)
+cleanup() { docker rm -f noisy-test-sb >/dev/null 2>&1; rm -rf "$TMP"; }
+trap cleanup EXIT
+
+# Runs a shell inside the given container's network namespace.
+in_ns() {  # in_ns <container> <shell command>
+  docker run --rm --network "container:$1" --entrypoint sh "$CORE_IMAGE" -c "$2"
+}
+
+# The address a plain, untunnelled container gets. Anything equal to this is
+# a leak, no matter what the HTTP probe says.
+DIRECT_IP=$(docker run --rm --network "$PROBE_NET" --entrypoint sh "$CORE_IMAGE" \
+  -c 'wget -qO- --timeout=15 https://api.ipify.org' 2>/dev/null)
+if [ -z "$DIRECT_IP" ]; then
+  echo "cannot determine the direct egress address; refusing to report route health" >&2
+  exit 1
+fi
+echo "direct (untunnelled) egress: $DIRECT_IP"
+echo
+
+for route in $ROUTES; do
+  work="$TMP/$route"
+  mkdir -p "$work"
+  if ! python3 /opt/noisy/egress/build_configs.py "$route" "$work" >/dev/null 2>&1; then
+    printf '  %-16s BUILD-FAIL\n' "$route"; FAILED=$((FAILED+1)); continue
+  fi
+
+  docker rm -f noisy-test-sb >/dev/null 2>&1
+  # The config pins the cache file to an absolute path, so mount this route's
+  # own directory there. That keeps the probe's cache separate from the live
+  # instance's, which would otherwise block on the same file and die.
+  # --dns must mirror the restreamer service: without it docker forwards to
+  # the host's resolver, which this host has poisoned, and the probe resolves
+  # YouTube to an address the tunnel cannot reach.
+  if ! docker run -d --name noisy-test-sb --network "$PROBE_NET" \
+        --dns 1.1.1.1 --dns 8.8.8.8 \
+        --cap-add NET_ADMIN --cap-add NET_RAW --device /dev/net/tun \
+        --sysctl net.ipv4.conf.all.src_valid_mark=1 \
+        -v "$work/sing-box.json:/etc/sing-box/config.json:ro" \
+        -v "$work:/opt/noisy/data/egress" \
+        ghcr.io/sagernet/sing-box:v1.14.2 \
+        run -c /etc/sing-box/config.json -D /opt/noisy/data/egress >/dev/null 2>&1; then
+    printf '  %-16s START-FAIL\n' "$route"; FAILED=$((FAILED+1)); continue
+  fi
+  sleep 5
+
+  if [ "$(docker inspect noisy-test-sb -f '{{.State.Running}}' 2>/dev/null)" != "true" ]; then
+    why=$(docker logs noisy-test-sb 2>&1 | tail -1 | tr -d '\r' | head -c 50)
+    printf '  %-16s DIED        %s\n' "$route" "$why"
+    FAILED=$((FAILED+1)); continue
+  fi
+
+  code=$(in_ns noisy-test-sb \
+    'wget -qS --timeout=20 -O /dev/null https://www.youtube.com/generate_204 2>&1 \
+     | head -1 | tr -d "\r" | awk "{print \$2}"')
+  ip=$(in_ns noisy-test-sb 'wget -qO- --timeout=20 https://api.ipify.org' 2>/dev/null)
+
+  if [ -n "$ip" ] && [ "$ip" = "$DIRECT_IP" ]; then
+    printf '  %-16s LEAK        traffic left on the host ip, tunnel not active\n' "$route"
+    FAILED=$((FAILED+1))
+  elif [ "$code" = "204" ]; then
+    printf '  %-16s OK          youtube=%s exit=%s\n' "$route" "$code" "$ip"
+  else
+    printf '  %-16s FAIL        youtube=%s exit=%s\n' "$route" "${code:-none}" "${ip:-none}"
+    FAILED=$((FAILED+1))
+  fi
+  docker rm -f noisy-test-sb >/dev/null 2>&1
+done
+
+echo
+if [ "$FAILED" -eq 0 ]; then
+  echo "all routes tunnelled and reachable"
+else
+  echo "$FAILED route(s) failed"
+fi
+exit $([ "$FAILED" -eq 0 ] && echo 0 || echo 1)

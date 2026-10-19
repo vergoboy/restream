@@ -1,0 +1,27 @@
+#!/bin/bash
+# Root helper: show the live egress state.
+set -uo pipefail
+
+final=$(python3 - <<'PY'
+import json
+try:
+    print(json.load(open("/opt/noisy/secrets/sing-box.json"))["route"]["final"])
+except Exception:
+    print("unknown")
+PY
+)
+
+printf 'primary route : %s\n' "$final"
+printf 'egress container : %s\n' \
+  "$(docker inspect -f '{{.State.Status}}' noisy-egress 2>/dev/null || echo absent)"
+printf 'xray container   : %s\n' \
+  "$(docker inspect -f '{{.State.Status}}' noisy-egress-xray 2>/dev/null || echo absent)"
+
+ip=$(docker exec noisy-restreamer sh -c \
+  'wget -qO- --timeout=10 https://api.ipify.org' 2>/dev/null)
+[ -n "$ip" ] && printf 'exit ip         : %s\n' "$ip" || \
+  printf 'exit ip         : unavailable\n'
+
+code=$(docker exec noisy-restreamer sh -c \
+  'wget -S -qO /dev/null --timeout=10 https://www.youtube.com/generate_204 2>&1 | head -1' 2>/dev/null)
+printf 'youtube         : %s\n' "${code:-unreachable}"

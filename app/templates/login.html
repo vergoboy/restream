@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Noisy &middot; sign in</title>
+<link rel="stylesheet" href="{{ base }}/static/noisy.css">
+</head>
+<body class="auth">
+  <main class="card">
+    <h1 class="brand">Noisy</h1>
+    <p class="sub">Restreamer control panel</p>
+    {% if error %}<p class="err" role="alert">{{ error }}</p>{% endif %}
+    <form method="post" action="{{ base }}/login">
+      <input type="hidden" name="csrf_token" value="{{ csrf }}">
+      <label for="u">User</label>
+      <input id="u" name="username" value="admin" autocomplete="username"
+             required autofocus>
+      <label for="p">Password</label>
+      <input id="p" name="password" type="password"
+             autocomplete="current-password" required>
+      <button type="submit" class="primary">Sign in</button>
+    </form>
+    {% if bootstrap %}
+    <p class="hint">First run. Enter any password of 12 or more characters to
+    claim this account. It is stored as a salted hash and cannot be recovered
+    or reset from the panel.</p>
+    {% endif %}
+  </main>
+</body>
+</html>

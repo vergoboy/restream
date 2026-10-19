@@ -1,0 +1,52 @@
+#!/bin/bash
+# Noisy control: manage the data plane and show status.
+set -uo pipefail
+cd /opt/noisy || exit 1
+COMPOSE="docker compose -f /opt/noisy/docker-compose.yml"
+
+hdr() { printf '\n\033[1m== %s\033[0m\n' "$1"; }
+
+case "${1:-status}" in
+start)
+  $COMPOSE up -d
+  $COMPOSE ps
+  ;;
+stop)
+  $COMPOSE stop
+  ;;
+restart)
+  $COMPOSE restart
+  ;;
+down)
+  $COMPOSE down
+  ;;
+build)
+  $COMPOSE build
+  ;;
+status)
+  hdr "containers"
+  $COMPOSE ps --format 'table {{.Name}}\t{{.Status}}'
+  hdr "web panel"
+  if curl -fsS -m 5 http://127.0.0.1:18081/noisy/healthz; then
+    echo
+  else
+    echo "web panel not responding"
+  fi
+  hdr "egress"
+  sudo /opt/noisy/scripts/egress-status
+  hdr "services"
+  systemctl is-active noisy-web.service 2>/dev/null | sed 's/^/noisy-web: /'
+  nginx -t 2>&1 | tail -1
+  ;;
+logs)
+  shift
+  $COMPOSE logs -f --tail=100 "$@"
+  ;;
+web-logs)
+  journalctl -u noisy-web.service -n 100 --no-pager
+  ;;
+*)
+  echo "usage: $0 {start|stop|restart|down|status|logs|web-logs|build}" >&2
+  exit 2
+  ;;
+esac

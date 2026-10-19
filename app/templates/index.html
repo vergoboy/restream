@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Noisy</title>
+<link rel="stylesheet" href="{{ base }}/static/noisy.css">
+</head>
+<body>
+<header class="top">
+  <h1 class="brand">Noisy</h1>
+  <nav>
+    <span id="status-pill" class="pill">connecting</span>
+    <form method="post" action="{{ base }}/logout" class="inline">
+      <input type="hidden" name="csrf_token" value="{{ csrf }}">
+      <button type="submit" class="ghost">Sign out</button>
+    </form>
+  </nav>
+</header>
+
+<main class="wrap">
+  <p id="flash" class="flash" hidden role="status"></p>
+
+  <section class="card">
+    <h2>Stream</h2>
+    <dl class="kv">
+      <dt>Core</dt><dd id="s-core">-</dd>
+      <dt>Status</dt><dd id="s-state">-</dd>
+      <dt>Uptime</dt><dd id="s-uptime">-</dd>
+      <dt>Reconnects</dt><dd id="s-reconn">-</dd>
+      <dt>Egress</dt><dd id="s-egress">-</dd>
+    </dl>
+    <div class="row">
+      <button id="btn-start" class="primary">Start restream</button>
+      <button id="btn-stop" class="danger">Stop</button>
+      <label class="check"><input type="checkbox" id="reencode"> Re-encode
+        (slower, maximum compatibility)</label>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Destination</h2>
+    <p class="muted">The stream key is encrypted at rest and is never shown
+    again after saving. <span id="d-key-suffix" class="kws"></span></p>
+    <form id="form-dest">
+      <label for="d-server">RTMPS server</label>
+      <input id="d-server" name="server" placeholder="rtmps://a.rtmps.youtube.com/live2"
+             autocomplete="off" spellcheck="false">
+      <label for="d-key">Stream key</label>
+      <input id="d-key" name="key" type="password" autocomplete="off"
+             spellcheck="false" placeholder="(only needed when changing)">
+      <div class="row">
+        <button type="submit" class="primary">Save destination</button>
+        <button type="button" id="btn-clear" class="ghost">Clear</button>
+      </div>
+    </form>
+  </section>
+
+  <section class="card">
+    <h2>Ingest</h2>
+    <p class="muted">Point OBS at this server. Regenerating the key revokes
+    the old one immediately.</p>
+    <label for="i-url">RTMP publish URL</label>
+    <input id="i-url" readonly spellcheck="false">
+    <pre id="i-key" class="report" hidden></pre>
+    <div class="row">
+      <button type="button" id="btn-copy" class="ghost">Copy URL</button>
+      <button type="button" id="btn-show" class="ghost">Show key</button>
+      <button type="button" id="btn-rot" class="danger">Regenerate key</button>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Egress</h2>
+    <p class="muted">YouTube-bound traffic leaves through the VPN exit, not
+    this server.</p>
+    <label for="e-route">Primary route</label>
+    <select id="e-route">
+      <option value="vpn-hysteria2">Hysteria2 (UDP)</option>
+      <option value="vpn-grpc">gRPC (TCP)</option>
+      <option value="vpn-reality">REALITY + ML-KEM</option>
+      <option value="vpn-httpupgrade">HTTPUpgrade</option>
+      <option value="vpn-xhttp">XHTTP</option>
+      <option value="vpn-httpobf">HTTP obfuscation</option>
+      <option value="vpn-xray">Xray auto (best available)</option>
+    </select>
+    <div class="row">
+      <button type="button" id="btn-route" class="primary">Apply</button>
+      <button type="button" id="btn-test" class="ghost">Test all routes</button>
+    </div>
+    <pre id="e-report" class="report" hidden></pre>
+  </section>
+</main>
+
+<script src="{{ base }}/static/noisy.js"
+        data-base="{{ base }}" data-csrf="{{ csrf }}"></script>
+</body>
+</html>

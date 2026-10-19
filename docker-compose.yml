@@ -1,0 +1,118 @@
+# Noisy - restreamer data plane.
+#
+# Layout:
+#   noisy-restreamer      datarhei/core. Its HTTP API is bound to loopback
+#                         only, and its own RTMP server is switched off: the
+#                         core is a client of nginx, not a server behind it.
+#   noisy-egress          sing-box TUN device inside the restreamer's own network
+#                         namespace, so ffmpeg's outbound sockets are forced
+#                         through the VPN without touching host routing.
+#   noisy-egress-xray     userspace SOCKS5 for the protocols sing-box cannot
+#                         express (XHTTP, post-quantum ML-KEM XTLS).
+#
+# The public RTMP ingest endpoint is nginx on the host. It authenticates every
+# publish with the panel, and the restreamer then reads that application back
+# out of nginx over the docker bridge as a plain RTMP client.
+
+name: noisy
+
+networks:
+  noisy_net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.240.0/24
+
+services:
+  noisy-restreamer:
+    image: datarhei/core@sha256:d80f1f2beb7ef2a9551f36e80bcc09a6d4d2216c70b6ad5ff733798738835187
+    container_name: noisy-restreamer
+    restart: unless-stopped
+    stop_grace_period: 20s
+    # The core does not reap its ffmpeg children, so every failed input leaves a
+    # zombie behind (see scripts/egress-watchdog). At the 256 default the pile
+    # reaches pids.max within minutes of a bad start, and once it does every
+    # fork fails and the whole data plane is dead. Headroom plus the watchdog's
+    # pids guard turns that into a slow, visible, recoverable condition.
+    env_file:
+      - ./secrets/core.env
+    environment:
+      CORE_CONFIGFILE: /core/config/config.json
+      CORE_ADDRESS: ":8080"
+      CORE_LOG_LEVEL: warn
+      CORE_UPDATE_CHECK: "false"
+      # No relay: nginx relays nothing here, and the core reads the stream
+      # itself, so its RTMP server would only be an unused listener.
+      CORE_RTMP_ENABLE: "false"
+    volumes:
+      - ./restreamer/config:/core/config
+      - ./restreamer/data:/core/data
+    ports:
+      - "127.0.0.1:18080:8080"
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
+    networks:
+      noisy_net:
+        ipv4_address: 172.28.240.2
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 8080"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    mem_limit: 1500m
+    cpus: 3.0
+    pids_limit: 4096
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}
+
+  noisy-egress:
+    image: ghcr.io/sagernet/sing-box:v1.14.2
+    container_name: noisy-egress
+    restart: unless-stopped
+    # Shares the restreamer's network namespace: one TUN, all ffmpeg traffic.
+    network_mode: "service:noisy-restreamer"
+    depends_on:
+      noisy-restreamer:
+        condition: service_started
+        restart: true
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    volumes:
+      - ./secrets/sing-box.json:/etc/sing-box/config.json:ro
+      - ./data/egress:/opt/noisy/data/egress
+    command: ["run", "-c", "/etc/sing-box/config.json", "-D", "/opt/noisy/data/egress"]
+    sysctls:
+      net.ipv4.conf.all.src_valid_mark: "1"
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}
+
+  noisy-egress-xray:
+    image: ghcr.io/xtls/xray-core@sha256:592ec4d11f656db95598d01e76dbcc6e002d67360b96a5436500a938230f52c7
+    container_name: noisy-egress-xray
+    restart: unless-stopped
+    # Needs uid 0 to read the 0600 secret config; it is not published to the
+    # host network and only reachable from inside noisy_net.
+    user: "0:0"
+    command: ["run", "-config", "/etc/xray/config.json"]
+    volumes:
+      - ./secrets/xray.json:/etc/xray/config.json:ro
+    networks:
+      noisy_net:
+        ipv4_address: 172.28.240.3
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 256m
+    cpus: 0.5
+    pids_limit: 128
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}

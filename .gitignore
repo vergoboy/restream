@@ -1,0 +1,25 @@
+# Secrets and environment
+secrets/
+config/*.env
+*.env
+!*.env.example
+
+# Runtime data and logs
+data/
+logs/
+restreamer/data/
+restreamer/config/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+
+# Editors / OS
+.idea/
+.vscode/
+.DS_Store
+*.swp

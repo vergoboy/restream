@@ -1,0 +1,49 @@
+#!/bin/bash
+# Root helper: switch the primary VPN route and reload the data plane.
+# Accepts exactly one argument, validated against a fixed allowlist.
+set -euo pipefail
+
+ALLOWED="vpn-hysteria2 vpn-grpc vpn-reality vpn-httpupgrade vpn-xhttp vpn-httpobf vpn-xray"
+ROUTE="${1:-}"
+
+if [ -z "$ROUTE" ]; then
+  echo "usage: $0 <route>" >&2
+  echo "routes: $ALLOWED" >&2
+  exit 2
+fi
+case " $ALLOWED " in
+  *" $ROUTE "*) ;;
+  *) echo "unknown route: $ROUTE" >&2; exit 2 ;;
+esac
+
+# vpn-xray means "let xray's balancer pick the healthiest of its own
+# outbounds". Everything else is a concrete sing-box outbound; the builder
+# falls back to the best available one if that outbound is unavailable.
+python3 /opt/noisy/egress/build_configs.py "$ROUTE" >/dev/null
+chmod 600 /opt/noisy/secrets/sing-box.json /opt/noisy/secrets/xray.json
+
+docker compose -f /opt/noisy/docker-compose.yml up -d noisy-egress-xray >/dev/null
+docker compose -f /opt/noisy/docker-compose.yml restart noisy-egress >/dev/null
+
+# Wait for the tunnel to actually carry traffic before reporting success.
+# A bare connectivity probe is not enough: the containers get public
+# resolvers from compose, so a dead tunnel still answers them and `nc` would
+# report success while every packet leaves on the host ip. Compare the exit
+# ip against the host's own instead.
+host_ip=$(wget -qO- --timeout=10 https://api.ipify.org 2>/dev/null)
+for _ in $(seq 1 25); do
+  ip=$(docker exec noisy-restreamer sh -c \
+    'wget -qO- --timeout=10 https://api.ipify.org' 2>/dev/null)
+  if [ -n "$ip" ] && { [ -z "$host_ip" ] || [ "$ip" != "$host_ip" ]; }; then
+    echo "route $ROUTE is up, exit ip $ip"
+    # A different route means a different exit ip: refresh the watchdog's
+    # expectation so it does not fight the new route.
+    printf '%s\n' "$ip" > /opt/noisy/data/egress/expected_exit_ip
+    chmod 600 /opt/noisy/data/egress/expected_exit_ip
+    exit 0
+  fi
+  sleep 1
+done
+
+echo "route $ROUTE did not come up within 25s" >&2
+exit 1
