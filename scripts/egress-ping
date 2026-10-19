@@ -1,0 +1,6 @@
+#!/bin/bash
+# Root helper: run the RTT probe inside the restreamer's network namespace,
+# so the measurement goes through the same tunnel as the stream.
+set -euo pipefail
+pid=$(docker inspect -f '{{.State.Pid}}' noisy-restreamer)
+exec nsenter -t "$pid" -n /usr/bin/env node /opt/noisy/scripts/egress-ping.mjs
