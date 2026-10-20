@@ -14,7 +14,7 @@ export default function Dests({ x, reload }) {
     const r = await post('/destinations', 'POST', f);
     if (r.ok) { setF(empty); setErr(''); reload(); } else setErr(t('invalid'));
   };
-  const act = async a => { await post('/streams', 'POST', { action: a, ids: sel }); reload(); };
+  const act = async a => { const j = await (await post('/streams', 'POST', { action: a, ids: sel })).json().catch(() => ({})); setErr(Object.values(j.out || {}).includes(false) ? t('startfail') : ''); reload(); };
   const test = async id => { const j = await (await post('/streams', 'POST', { action: 'test', ids: [id] })).json(); setTests(p => ({ ...p, [id]: j.out?.[id] ?? false })); };
   const del = async id => { await post('/destinations', 'DELETE', { id }); setSel(s => s.filter(i => i !== id)); reload(); };
   const tog = id => setSel(s => s.includes(id) ? s.filter(i => i !== id) : [...s, id]);
