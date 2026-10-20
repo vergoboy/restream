@@ -3,7 +3,9 @@ import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import anime from 'animejs';
 import { usePrefs } from './Prefs';
-const API = '/noisy/api', W = 640, H = 180;
+import Dests from './Dests';
+import Vpn from './Vpn';
+const API = '/restream/api', W = 640, H = 180;
 // Suggested YouTube ingest bitrates (kbps)
 const PRESETS = [['720p30', 2500], ['1080p30', 4500], ['1080p60', 6800]];
 // Build an SVG path; null samples leave a gap
@@ -12,11 +14,12 @@ const line = (s, k, max) => s.map((p, i) => p[k] == null ? '' :
 const mb = b => (b / 1048576).toFixed(1);
 export default function Dash({ me: m0, ingest }) {
   const { t } = usePrefs();
-  const [me, setMe] = useState(m0), [s, setS] = useState([]), [br, setBr] = useState(m0.bitrate_kbps), [msg, setMsg] = useState('');
+  const [me, setMe] = useState(m0), [s, setS] = useState([]), [br, setBr] = useState(m0.bitrate_kbps), [msg, setMsg] = useState(''), [x, setX] = useState({ dests: [], hist: {}, egress: {} }), [re, setRe] = useState(!!m0.reencode), loadRef = useRef();
   const root = useRef(null);
   useEffect(() => {
     let on = true;
-    const tick = async () => { const r = await fetch(API + '/me'); if (r.ok && on) { const j = await r.json(); setMe(j.me); setS(j.samples); } };
+    const tick = async () => { const r = await fetch(API + '/me'); if (r.ok && on) { const j = await r.json(); setMe(j.me); setS(j.samples); setX({ dests: j.dests, hist: j.hist, egress: j.egress }); } };
+    loadRef.current = tick;
     tick();
     const id = setInterval(tick, 5000);
     anime({ targets: root.current.querySelectorAll('.card'), translateY: [18, 0], opacity: [0, 1], delay: anime.stagger(80), easing: 'easeOutExpo' });
@@ -27,10 +30,10 @@ export default function Dash({ me: m0, ingest }) {
   const max = Math.max(100, ...s.map(p => p.ping ?? 0)) * 1.2;
   const pct = me.quota_mb ? Math.min(100, (me.used_in + me.used_out) / (me.quota_mb * 10485.76)) : 0;
   const save = async () => {
-    const r = await fetch(API + '/me', { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ bitrate_kbps: br }) });
+    const r = await fetch(API + '/me', { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ bitrate_kbps: br, reencode: re ? 1 : 0 }) });
     setMsg(r.ok ? t('saved') : '!');
   };
-  const out = async () => { await fetch(API + '/login', { method: 'DELETE' }); location.href = '/noisy/login'; };
+  const out = async () => { await fetch(API + '/login', { method: 'DELETE' }); location.href = '/restream/login'; };
   return (
     <div ref={root}>
       <div className="row" style={{ justifyContent: 'space-between', marginTop: 18 }}>
@@ -64,11 +67,14 @@ export default function Dash({ me: m0, ingest }) {
             <input type="number" min="500" max="12000" step="100" value={br} onChange={e => setBr(+e.target.value)} style={{ maxWidth: 140 }} />
             <button className="btn pri" onClick={save}>{t('save')}</button><span className="k">{msg}</span>
           </div>
+          <label className="row k" style={{ marginTop: 10 }}><input type="checkbox" checked={re} onChange={e => setRe(e.target.checked)} style={{ width: 'auto' }} />{t('reencode')}</label>
           <div className="row" style={{ marginTop: 10 }}>
             <span className="k">{t('suggested')}:</span>
             {PRESETS.map(([n, v]) => <button key={n} className={'chip' + (br === v ? ' on' : '')} onClick={() => setBr(v)}>{n} · {v}</button>)}
           </div>
         </div>
+        <Dests x={x} reload={() => loadRef.current?.()} />
+        <Vpn x={x} s={s} admin={me.role === 'admin'} reload={() => loadRef.current?.()} />
         <div className="card wide"><div className="k">{t('ingest')}</div><code>{ingest}/{me.ingest_key}</code></div>
       </div>
     </div>

@@ -2,7 +2,7 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { usePrefs } from './Prefs';
-const API = '/noisy/api/admin/users', J = { 'content-type': 'application/json' };
+const API = '/restream/api/admin/users', J = { 'content-type': 'application/json' };
 const mb = b => (b / 1048576).toFixed(1);
 export default function Admin() {
   const { t } = usePrefs();
@@ -26,6 +26,14 @@ export default function Admin() {
               <td><input style={{ maxWidth: 110 }} type="number" min="0" defaultValue={u.quota_mb} onBlur={e => send('PATCH', { id: u.id, quota_mb: e.target.value })} /></td>
               <td><button className={'chip' + (u.active ? ' on' : '')} onClick={() => send('PATCH', { id: u.id, active: !u.active })}>{u.active ? t('active') : t('off')}</button></td></tr>
           ))}</tbody></table>
+      </div>
+      <div className="card wide" style={{ overflowX: 'auto' }}>
+        <b>{t('dests')}</b>
+        <table><tbody>{(d.dests || []).map(x => (
+          <tr key={x.id}><td>{x.username}</td><td>{x.name}</td><td><code>{x.url}</code> {x.key_hint}</td>
+            <td><button className={'chip' + (x.active ? ' on' : '')} onClick={() => send('PATCH', { dest_id: x.id, dest_active: !x.active })}>{x.active ? t('active') : t('off')}</button></td>
+            <td><button className="chip" onClick={() => send('DELETE', { dest_id: x.id })}>{t('del')}</button></td></tr>
+        ))}</tbody></table>
       </div>
       <div className="card wide" style={{ overflowX: 'auto' }}>
         <b>{t('logs')}</b>

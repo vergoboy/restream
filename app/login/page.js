@@ -6,8 +6,8 @@ export default function Login() {
   const [f, setF] = useState({ username: '', password: '' }), [err, setErr] = useState('');
   const go = async e => {
     e.preventDefault();
-    const r = await fetch('/noisy/api/login', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(f) });
-    if (r.ok) location.href = '/noisy/'; else setErr((await r.json().catch(() => ({}))).error);
+    const r = await fetch('/restream/api/login', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(f) });
+    if (r.ok) location.href = '/restream/'; else setErr((await r.json().catch(() => ({}))).error);
   };
   return (
     <form onSubmit={go} className="card" style={{ maxWidth: 380, margin: '14vh auto 0', display: 'grid', gap: 12 }}>

@@ -1,20 +1,25 @@
-# noisy-next (milestone 1)
+# noisy-next (milestone 2) - served at /restream
 
-Replaces the Flask panel. nginx, datarhei and the egress stack stay untouched.
+Per-user destinations (RTMP URL + stream key stored separately, key sealed with AES-GCM),
+multi-select start/stop (one datarhei process per destination), per-destination chart,
+real traffic metering + quota stop, optional re-encode bitrate, admin VPN route switch
+with per-route latency traces, admin management of every destination.
 
-Done: multi-user login, admin (accounts, quota, logs), per-user ingest keys with a
-quota-aware `on_publish` gate, fa/en + dark/light, live tunnel ping/jitter/loss chart.
-Not yet: per-user datarhei processes, real traffic metering, applying the bitrate
-(it is only stored), route switching UI.
-
-## Install (fish, as root)
-    systemctl stop noisy-web.service
+## Upgrade from milestone 1 (fish, as root)
+    # new sudoers (args are validated inside the scripts)
+    printf '%s\n' \
+      'noisy ALL=(root) NOPASSWD: /opt/noisy/scripts/egress-ping *' \
+      'noisy ALL=(root) NOPASSWD: /opt/noisy/scripts/egress-status' \
+      'noisy ALL=(root) NOPASSWD: /opt/noisy/scripts/egress-set *' > /etc/sudoers.d/noisy-ping
+    chmod 440 /etc/sudoers.d/noisy-ping; visudo -cf /etc/sudoers.d/noisy-ping
     cp scripts/egress-ping scripts/egress-ping.mjs /opt/noisy/scripts/
-    chown root:root /opt/noisy/scripts/egress-ping /opt/noisy/scripts/egress-ping.mjs
-    chmod 755 /opt/noisy/scripts/egress-ping
-    echo 'noisy ALL=(root) NOPASSWD: /opt/noisy/scripts/egress-ping' > /etc/sudoers.d/noisy-ping
-    chmod 440 /etc/sudoers.d/noisy-ping
-    npm install; npm run build
-    # first start only: NOISY_ADMIN_PASSWORD=... in config/web.env (remove it afterwards)
-    # systemd: EnvironmentFile=/opt/noisy/config/web.env, ExecStart=/usr/bin/npm start
-Existing ingest keys change: every user gets a new key, shown in their panel.
+    chown root:root /opt/noisy/scripts/egress-ping*; chmod 755 /opt/noisy/scripts/egress-ping
+    # restream.env needs the datarhei core API login (same values as secrets/core.env):
+    #   NOISY_CORE_API=http://127.0.0.1:18080  NOISY_CORE_USER=...  NOISY_CORE_PASS=...
+    #   NOISY_NGINX_RTMP_HOST=172.28.240.1
+    sudo -u noisy npm run build; systemctl restart restream-web
+The master key (secrets/master.key) must be readable by the noisy user.
+
+## Switching the RTMP gate (do this last, in a quiet moment)
+nginx/rtmp.conf: on_publish http://127.0.0.1:18082/restream/internal/rtmp/publish;
+then nginx -t && reload. Old single ingest key stops working; each user has their own.

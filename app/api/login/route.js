@@ -10,7 +10,7 @@ export async function POST(req) {
   const u = db.prepare('SELECT * FROM users WHERE username=? AND active=1').get(String(b.username || ''));
   if (!u || !verify(String(b.password || ''), u.pw)) { fail(ip); log(b.username, 'login_fail', ip); return NextResponse.json({ error: 'bad' }, { status: 401 }); }
   const res = NextResponse.json({ ok: true });
-  res.cookies.set('noisy_sid', newSession(u.id), { httpOnly: true, sameSite: 'strict', path: '/noisy', secure: process.env.NOISY_SECURE_COOKIES === '1', maxAge: 43200 });
+  res.cookies.set('noisy_sid', newSession(u.id), { httpOnly: true, sameSite: 'strict', path: '/restream', secure: process.env.NOISY_SECURE_COOKIES === '1', maxAge: 43200 });
   log(u.username, 'login', ip);
   return res;
 }
@@ -18,6 +18,6 @@ export async function DELETE() {
   const t = cookies().get('noisy_sid')?.value;
   if (t) db.prepare('DELETE FROM sessions WHERE token=?').run(t);
   const res = NextResponse.json({ ok: true });
-  res.cookies.set('noisy_sid', '', { path: '/noisy', maxAge: 0 });
+  res.cookies.set('noisy_sid', '', { path: '/restream', maxAge: 0 });
   return res;
 }

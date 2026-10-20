@@ -1,7 +1,15 @@
-// TCP connect time to 1.1.1.1:443 (an IP, so no DNS), five samples
+// TCP connect time to host:port, five samples. DNS goes to 1.1.1.1 explicitly:
+// inside the tunnel netns it is hijacked by sing-box, the host resolver is not reachable.
 import net from 'node:net';
+import dns from 'node:dns';
+const [host = '1.1.1.1', port = '443'] = process.argv.slice(2);
+let ip = host;
+if (!net.isIP(host)) {
+  const r = new dns.promises.Resolver(); r.setServers(['1.1.1.1']);
+  try { ip = (await r.resolve4(host))[0]; } catch { console.log(JSON.stringify({ rtts: [null, null, null, null, null] })); process.exit(0); }
+}
 const one = () => new Promise(res => {
-  const t0 = process.hrtime.bigint(), s = net.connect({ host: '1.1.1.1', port: 443 });
+  const t0 = process.hrtime.bigint(), s = net.connect({ host: ip, port: +port });
   const done = v => { s.destroy(); res(v); };
   s.setTimeout(2000);
   s.once('connect', () => done(Number(process.hrtime.bigint() - t0) / 1e6));

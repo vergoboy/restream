@@ -1,12 +1,14 @@
 import { NextResponse } from 'next/server';
 import db, { log } from '@/lib/db';
 import { currentUser, hash, newKey, isJson, pub } from '@/lib/auth';
+import { stopById } from '@/lib/streams';
 const admin = () => { const u = currentUser(); return u?.role === 'admin' ? u : null; };
 const no = () => NextResponse.json({}, { status: 403 });
 export const dynamic = 'force-dynamic';
 export async function GET() {
   if (!admin()) return no();
-  return NextResponse.json({ users: db.prepare('SELECT * FROM users').all().map(pub), logs: db.prepare('SELECT * FROM logs ORDER BY id DESC LIMIT 100').all() });
+  return NextResponse.json({ users: db.prepare('SELECT * FROM users').all().map(pub), logs: db.prepare('SELECT * FROM logs ORDER BY id DESC LIMIT 100').all(),
+    dests: db.prepare('SELECT d.id,d.name,d.url,d.key_hint,d.active,u.username FROM destinations d JOIN users u ON u.id=d.user_id').all() });
 }
 export async function POST(req) {
   const a = admin();
@@ -26,6 +28,21 @@ export async function PATCH(req) {
   const id = parseInt(b.id);
   if ('quota_mb' in b) db.prepare('UPDATE users SET quota_mb=? WHERE id=?').run(Math.max(0, parseInt(b.quota_mb) || 0), id);
   if ('active' in b && id !== a.id) db.prepare('UPDATE users SET active=? WHERE id=?').run(b.active ? 1 : 0, id);
+  if ('dest_id' in b) {
+    const did = parseInt(b.dest_id);
+    db.prepare('UPDATE destinations SET active=? WHERE id=?').run(b.dest_active ? 1 : 0, did);
+    if (!b.dest_active) await stopById(did);
+  }
   log(a.username, 'user_updated', JSON.stringify({ id, ...b }));
+  return NextResponse.json({ ok: true });
+}
+export async function DELETE(req) {
+  const a = admin();
+  if (!a || !isJson(req)) return no();
+  const b = await req.json().catch(() => ({}));
+  const did = parseInt(b.dest_id);
+  await stopById(did);
+  db.prepare('DELETE FROM destinations WHERE id=?').run(did);
+  log(a.username, 'dest_deleted', String(did));
   return NextResponse.json({ ok: true });
 }
