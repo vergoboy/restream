@@ -43,7 +43,7 @@ export default function Dests({ x, reload }) {
               <span><b>{d.name}</b><br /><span className="k" dir="ltr">{host(d.url)} · {d.key_hint}</span></span>
             </label>
             <span className="k" style={{ minWidth: 120 }}>
-              <span className={'dot ' + (d.want && last?.exec === 'running' ? 'up' : 'dn')} /> {d.want ? (last?.exec ?? '…') : t('idle')}{d.want && last?.err && last.exec !== 'running' && <><br /><span dir="ltr" style={{ color: 'var(--a2)' }}>{last.err}</span></>}
+              <span className={'dot ' + (d.want && last?.exec === 'running' ? 'up' : 'dn')} /> {d.want ? (last?.exec === 'waiting' ? t('wait') : last?.exec ?? '…') : t('idle')}{d.want && last?.err && last.exec !== 'running' && <><br /><span dir="ltr" style={{ color: 'var(--a2)' }}>{last.err}</span></>}
               {last?.kbps != null && <><br />{Math.round(last.kbps)} kbps · {last.ping != null ? last.ping.toFixed(0) + ' ms' : '—'}</>}
             </span>
             <svg viewBox="0 0 640 120" style={{ flex: 1, minWidth: 160, maxWidth: 360, height: 48, direction: 'ltr' }} preserveAspectRatio="none">
